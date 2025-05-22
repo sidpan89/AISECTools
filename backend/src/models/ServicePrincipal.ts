@@ -1,3 +1,4 @@
+// DEPRECATED: This model will be replaced by CloudCredentials.ts
 // src/models/ServicePrincipal.ts
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne } from 'typeorm';
 import { User } from './User';
