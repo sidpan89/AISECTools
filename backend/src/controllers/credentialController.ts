@@ -1,6 +1,7 @@
 // src/controllers/credentialController.ts
 import { Request, Response, NextFunction } from 'express';
 import { credentialService } from '../services/encryptionService';
+import logger from '../utils/logger'; // Added import
 import { CloudCredentials } from '../models/CloudCredentials';
 import { CloudProvider } from '../models/enums/CloudProvider'; // Import CloudProvider
 import { AppDataSource } from '../dataSource';
@@ -29,9 +30,18 @@ export const createCloudCredential = async (req: Request, res: Response, next: N
       encryptedCredentials: encryptedJsonCredentials,
     });
     await cloudCredentialsRepository.save(newCredential);
-
+    logger.info('Cloud credential created', { userId: (req as any).user.id, credentialId: newCredential.id, provider: newCredential.provider, path: req.path, method: req.method });
     return res.status(201).json({ message: 'Cloud credential created', credentialId: newCredential.id });
   } catch (err) {
+    logger.error('Failed to create cloud credential', { 
+      userId: (req as any).user?.id, 
+      provider: req.body.provider,
+      name: req.body.name,
+      error: (err as Error).message, 
+      stack: (err as Error).stack,
+      path: req.path,
+      method: req.method
+    });
     next(err);
   }
 };
@@ -40,6 +50,8 @@ export const getCloudCredentials = async (req: Request, res: Response, next: Nex
   try {
     const userId = (req as any).user.id;
     const credentialsList = await cloudCredentialsRepository.find({ where: { userId } });
+    // Optional: Log successful retrieval, but be mindful of data volume if logs are verbose
+    // logger.info('Retrieved cloud credentials for user', { userId, count: credentialsList.length, path: req.path, method: req.method });
 
     const sanitizedCredentials = credentialsList.map(cred => {
       const decryptedStringifiedCredentials = credentialService.decrypt(cred.encryptedCredentials);
@@ -65,6 +77,13 @@ export const getCloudCredentials = async (req: Request, res: Response, next: Nex
 
     return res.json(sanitizedCredentials);
   } catch (err) {
+    logger.error('Failed to get cloud credentials', { 
+      userId: (req as any).user?.id, 
+      error: (err as Error).message, 
+      stack: (err as Error).stack,
+      path: req.path,
+      method: req.method
+    });
     next(err);
   }
 };
@@ -77,11 +96,21 @@ export const deleteCloudCredential = async (req: Request, res: Response, next: N
     const result = await cloudCredentialsRepository.delete({ id: credentialId, userId });
 
     if (result.affected === 0) {
+      // Log this specific case as a warning or info, as it's a client error (not found) rather than server error
+      logger.warn('Cloud credential not found for deletion or user not authorized', { userId, credentialId, path: req.path, method: req.method });
       return res.status(404).json({ message: 'Credential not found or not authorized to delete.' });
     }
-
-    return res.status(200).json({ message: 'Credential deleted successfully.' });
+    logger.info('Cloud credential deleted successfully', { userId, credentialId, path: req.path, method: req.method });
+    return res.status(200).json({ message: 'Credential deleted successfully.' }); // Changed from 204 to 200 to allow message
   } catch (err) {
+    logger.error('Failed to delete cloud credential', { 
+      userId: (req as any).user?.id, 
+      credentialId: req.params.credentialId,
+      error: (err as Error).message, 
+      stack: (err as Error).stack,
+      path: req.path,
+      method: req.method
+    });
     next(err);
   }
 };

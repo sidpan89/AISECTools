@@ -1,6 +1,7 @@
 // backend/src/services/JobSchedulerService.ts
 import cron from 'node-cron';
 import { AppDataSource } from '../dataSource';
+import logger from '../utils/logger'; // Added import
 import { ScheduledScan } from '../models/ScheduledScan';
 import { scanService } from './scanService'; // Assuming scanService is exportable and named so
 // import { LessThanOrEqual, MoreThanOrEqual, IsNull, FindOptionsWhere } from 'typeorm'; // These seem unused
@@ -18,27 +19,27 @@ export class JobSchedulerService {
 
   private constructor() {
     if (!AppDataSource.isInitialized) {
-        console.warn("DataSource not initialized when JobSchedulerService constructor called. Schedules might not load immediately.");
+        logger.warn("DataSource not initialized when JobSchedulerService constructor called. Schedules might not load immediately.");
         // Attempt to initialize schedules later or ensure AppDataSource is initialized before first call to getInstance
     } else {
         this.initializeSchedules().catch(error => {
-            console.error("Failed to initialize job schedules in constructor:", error);
+            logger.error("Failed to initialize job schedules in constructor", { error: error.message, stack: error.stack });
         });
     }
   }
 
   public static async getInstance(): Promise<JobSchedulerService> {
     if (!AppDataSource.isInitialized) {
-        console.log("Waiting for DataSource to initialize before getting JobSchedulerService instance...");
+        logger.info("Waiting for DataSource to initialize before getting JobSchedulerService instance...");
         await AppDataSource.initialize(); // Ensure it's initialized
-        console.log("DataSource initialized.");
+        logger.info("DataSource initialized for JobSchedulerService.");
     }
     if (!JobSchedulerService._instance) {
         JobSchedulerService._instance = new JobSchedulerService();
         // If constructor didn't run initializeSchedules due to timing, call it now.
         if (this._instance.runningJobs.size === 0 && AppDataSource.isInitialized) {
              await JobSchedulerService._instance.initializeSchedules().catch(error => {
-                console.error("Failed to initialize job schedules in getInstance:", error);
+                logger.error("Failed to initialize job schedules in getInstance", { error: error.message, stack: error.stack });
             });
         }
     }
@@ -48,10 +49,10 @@ export class JobSchedulerService {
   // Make initializeSchedules public if called from getInstance after constructor check
   public async initializeSchedules(): Promise<void> { 
     if (!AppDataSource.isInitialized) {
-        console.error("Cannot initialize schedules, DataSource not ready.");
+        logger.error("Cannot initialize schedules, DataSource not ready.");
         return;
     }
-    console.log('Initializing job schedules...');
+    logger.info('Initializing job schedules...');
     const activeSchedules = await this.scheduledScanRepository.find({
       where: { isEnabled: true },
       relations: ['credential'], // Ensure credential relation is loaded for provider info
@@ -60,12 +61,12 @@ export class JobSchedulerService {
     for (const schedule of activeSchedules) {
       this.scheduleJob(schedule);
     }
-    console.log(`Initialized ${this.runningJobs.size} scheduled jobs.`);
+    logger.info(`Initialized scheduled jobs`, { count: this.runningJobs.size });
   }
 
   private scheduleJob(scheduledScan: ScheduledScan): void {
     if (!cron.validate(scheduledScan.cronExpression)) {
-      console.error(`Invalid cron expression for scheduled scan ID ${scheduledScan.id}: ${scheduledScan.cronExpression}`);
+      logger.error('Invalid cron expression for scheduled scan', { scheduledScanId: scheduledScan.id, cronExpression: scheduledScan.cronExpression });
       return;
     }
 
@@ -73,7 +74,7 @@ export class JobSchedulerService {
     this.removeJob(scheduledScan.id, false); // false to not update DB as we are about to schedule it
 
     const cronJob = cron.schedule(scheduledScan.cronExpression, async () => {
-      console.log(`Executing scheduled scan ID ${scheduledScan.id}: ${scheduledScan.name}`);
+      logger.info('Executing scheduled scan', { scheduledScanId: scheduledScan.id, name: scheduledScan.name });
       try {
         // Update lastRunAt and nextRunAt (nextRunAt is tricky with node-cron directly,
         // cron.sendToAvoidNextRun() can be used or we can estimate based on cron expression)
@@ -101,15 +102,15 @@ export class JobSchedulerService {
           scheduledScan.targetIdentifier || undefined,
           scheduledScan.policyId || undefined
         );
-        console.log(`Successfully triggered scheduled scan ID ${scheduledScan.id}`);
-      } catch (error) {
-        console.error(`Error executing scheduled scan ID ${scheduledScan.id}:`, error);
+        logger.info('Successfully triggered scheduled scan', { scheduledScanId: scheduledScan.id });
+      } catch (error: any) { // Changed 'error' to 'error: any'
+        logger.error('Error executing scheduled scan', { scheduledScanId: scheduledScan.id, error: error.message, stack: error.stack });
         // Optionally, update the ScheduledScan entity with error information or disable it after too many failures
       }
     });
 
     this.runningJobs.set(scheduledScan.id, { scheduledScanId: scheduledScan.id, cronJob });
-    console.log(`Scheduled job ID ${scheduledScan.id} (${scheduledScan.name}) with cron: ${scheduledScan.cronExpression}`);
+    logger.info('Scheduled new job', { scheduledScanId: scheduledScan.id, name: scheduledScan.name, cronExpression: scheduledScan.cronExpression });
   }
 
   public addOrUpdateJob(scheduledScan: ScheduledScan): void {
@@ -125,11 +126,11 @@ export class JobSchedulerService {
     if (jobInfo) {
       jobInfo.cronJob.stop();
       this.runningJobs.delete(scheduledScanId);
-      console.log(`Stopped and removed job for scheduled scan ID ${scheduledScanId}`);
+      logger.info('Stopped and removed job for scheduled scan', { scheduledScanId });
       
       if (updateDbIsEnabledFlag) {
           this.scheduledScanRepository.update({ id: scheduledScanId }, { isEnabled: false, nextRunAt: null })
-            .catch(err => console.error(`Failed to update isEnabled for schedule ${scheduledScanId}`, err));
+            .catch(err => logger.error('Failed to update isEnabled flag for schedule on job removal', { scheduledScanId, error: err.message, stack: err.stack }));
       }
     }
   }
